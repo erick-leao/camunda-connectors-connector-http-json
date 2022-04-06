@@ -1,6 +1,0 @@
-{
-  "clusterId": "8222-e6bb-405f-b284-4e0c8e1a1171",
-  "method": "get",
-  "rl": "https://api.openweathermap.org/data/2.5/weather",
-  "queryParameters": { "q": "Berlin", "appid": "0f679c0fb16b1cd451d8cca61dfefabf", "units": "metric" }
-}
