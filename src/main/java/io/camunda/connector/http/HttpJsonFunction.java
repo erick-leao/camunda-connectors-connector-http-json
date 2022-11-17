@@ -44,6 +44,7 @@ import java.io.Reader;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import javax.validation.ValidationException;
 import org.slf4j.Logger;
@@ -64,10 +65,13 @@ import org.slf4j.LoggerFactory;
 public class HttpJsonFunction implements OutboundConnectorFunction {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(HttpJsonFunction.class);
+  protected static final String REQUEST_HEADER_TARGET_URL = "X-Camunda-Target-URL";
 
   private final Gson gson;
   private final GsonFactory gsonFactory;
   private final HttpRequestFactory requestFactory;
+
+  private Optional<String> proxyFunctionToUse = Optional.empty();
 
   public HttpJsonFunction() {
     this(
@@ -81,6 +85,8 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
     this.gson = gson;
     this.requestFactory = requestFactory;
     this.gsonFactory = gsonFactory;
+
+    proxyFunctionToUse = Optional.of("http://localhost:8080/function-connector-http-proxy-function-test1");
   }
 
   @Override
@@ -109,8 +115,8 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
   }
 
   private HttpRequest createRequest(final HttpJsonRequest request) throws IOException {
-    final var url = request.getUrl();
-    // TODO: add more holistic solution
+    final String url = proxyFunctionToUse.orElse(request.getUrl());
+    // TODO: Decide if we want to keep it now that we can use a proxy
     if (url.contains("computeMetadata")) {
       throw new ConnectorInputException(new ValidationException("The provided URL is not allowed"));
     }
@@ -137,7 +143,11 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
     }
 
     final var headers = createHeaders(request);
+    if (proxyFunctionToUse.isPresent()) {
+      headers.set(REQUEST_HEADER_TARGET_URL, request.getUrl());
+    }
     httpRequest.setHeaders(headers);
+
     return httpRequest;
   }
 
