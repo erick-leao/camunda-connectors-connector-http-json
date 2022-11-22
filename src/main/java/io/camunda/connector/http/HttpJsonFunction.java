@@ -18,6 +18,7 @@ package io.camunda.connector.http;
 
 import static org.apache.http.entity.ContentType.APPLICATION_JSON;
 
+import com.google.api.client.http.AbstractHttpContent;
 import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.HttpContent;
 import com.google.api.client.http.HttpHeaders;
@@ -26,6 +27,7 @@ import com.google.api.client.http.HttpRequestFactory;
 import com.google.api.client.http.HttpResponse;
 import com.google.api.client.http.HttpResponseException;
 import com.google.api.client.http.json.JsonHttpContent;
+import com.google.api.client.json.JsonGenerator;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.gson.Gson;
 import io.camunda.connector.api.annotation.OutboundConnector;
@@ -36,16 +38,17 @@ import io.camunda.connector.http.components.GsonComponentSupplier;
 import io.camunda.connector.http.components.HttpTransportComponentSupplier;
 import io.camunda.connector.http.model.HttpJsonRequest;
 import io.camunda.connector.http.model.HttpJsonResult;
-import io.camunda.connector.impl.ConnectorInputException;
+import io.camunda.connector.impl.config.ConnectorConfigurationUtil;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import javax.validation.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,23 +67,35 @@ import org.slf4j.LoggerFactory;
 public class HttpJsonFunction implements OutboundConnectorFunction {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(HttpJsonFunction.class);
+  public static final String PROXY_FUNCTION_URL_ENV_NAME = "CAMUNDA_CONNECTOR_HTTP_PROXY_URL";
 
   private final Gson gson;
   private final GsonFactory gsonFactory;
   private final HttpRequestFactory requestFactory;
 
+  private final String proxyFunctionUrl;
+
   public HttpJsonFunction() {
+    this(ConnectorConfigurationUtil.getProperty(PROXY_FUNCTION_URL_ENV_NAME));
+  }
+
+  public HttpJsonFunction(String proxyFunctionUrl) {
     this(
         GsonComponentSupplier.gsonInstance(),
         HttpTransportComponentSupplier.httpRequestFactoryInstance(),
-        GsonComponentSupplier.gsonFactoryInstance());
+        GsonComponentSupplier.gsonFactoryInstance(),
+        proxyFunctionUrl);
   }
 
   public HttpJsonFunction(
-      final Gson gson, final HttpRequestFactory requestFactory, final GsonFactory gsonFactory) {
+      final Gson gson,
+      final HttpRequestFactory requestFactory,
+      final GsonFactory gsonFactory,
+      String proxyFunctionUrl) {
     this.gson = gson;
     this.requestFactory = requestFactory;
     this.gsonFactory = gsonFactory;
+    this.proxyFunctionUrl = proxyFunctionUrl;
   }
 
   @Override
@@ -91,34 +106,74 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
     context.validate(request);
     context.replaceSecrets(request);
 
-    return handleRequest(request);
+    if (proxyFunctionUrl != null) {
+      return executeRequestViaProxy(proxyFunctionUrl, request);
+    } else {
+      return executeRequestDirectly(request);
+    }
   }
 
-  protected HttpJsonResult handleRequest(final HttpJsonRequest request) throws IOException {
-    final HttpRequest externalRequest = createRequest(request);
-    final HttpResponse externalResponse = sendRequest(externalRequest);
-    return toHttpJsonResponse(externalResponse);
+  protected HttpJsonResult executeRequestDirectly(HttpJsonRequest request) throws IOException {
+    final HttpRequest httpRequest = createRequest(request);
+    HttpResponse httpResponse = executeHttpRequest(httpRequest);
+    return toHttpJsonResponse(httpResponse);
   }
 
-  protected HttpResponse sendRequest(final HttpRequest request) throws IOException {
+  protected HttpResponse executeHttpRequest(HttpRequest externalRequest) throws IOException {
     try {
-      return request.execute();
+      return externalRequest.execute();
     } catch (HttpResponseException hrex) {
-      throw new ConnectorException(String.valueOf(hrex.getStatusCode()), hrex.getMessage());
+      throw new ConnectorException(String.valueOf(hrex.getStatusCode()), hrex.getMessage(), hrex);
     }
   }
 
-  private HttpRequest createRequest(final HttpJsonRequest request) throws IOException {
-    final var url = request.getUrl();
-    // TODO: add more holistic solution
-    if (url.contains("computeMetadata")) {
-      throw new ConnectorInputException(new ValidationException("The provided URL is not allowed"));
+  protected HttpJsonResult executeRequestViaProxy(String proxyUrl, HttpJsonRequest request)
+      throws IOException {
+    // Using the JsonHttpContent cannot work with an element on the root content,
+    // hence write it ourselves:
+    HttpContent content =
+        new AbstractHttpContent("application/json; charset=UTF-8") {
+          public void writeTo(OutputStream outputStream) throws IOException {
+            JsonGenerator jsonGenerator =
+                gsonFactory.createJsonGenerator(outputStream, StandardCharsets.UTF_8);
+            jsonGenerator.serialize(request);
+            jsonGenerator.flush();
+          }
+        };
+    final GenericUrl genericUrl = new GenericUrl(proxyUrl);
+
+    final HttpRequest httpRequest = requestFactory.buildPostRequest(genericUrl, content);
+    httpRequest.setFollowRedirects(false);
+    setTimeout(request, httpRequest);
+
+    HttpResponse httpResponse = executeHttpRequest(httpRequest);
+
+    if (!httpResponse.isSuccessStatusCode()) {
+      LOGGER.debug(
+          "Proxy invocation failed with HTTP error code {}: {}",
+          httpResponse.getStatusCode(),
+          httpResponse.getStatusMessage());
+      throw new ConnectorException(
+          String.valueOf(httpResponse.getStatusCode()),
+          "Failed to execute HTTP request: " + httpResponse.getStatusMessage());
     }
 
-    final var content = createContent(request);
-    final var method = request.getMethod().toUpperCase();
+    try (InputStream responseContentStream = httpResponse.getContent();
+        Reader reader = new InputStreamReader(responseContentStream)) {
+      final HttpJsonResult jsonResult = gson.fromJson(reader, HttpJsonResult.class);
+      LOGGER.debug("Proxy returned result: " + jsonResult);
+      return jsonResult;
+    } catch (final Exception e) {
+      LOGGER.debug("Failed to parse external response: {}", httpResponse, e);
+      throw new ConnectorException("Failed to parse result: " + e.getMessage(), e);
+    }
+  }
 
-    final GenericUrl genericUrl = new GenericUrl(url);
+  protected HttpRequest createRequest(final HttpJsonRequest request) throws IOException {
+    final String method = request.getMethod().toUpperCase();
+    final GenericUrl genericUrl = new GenericUrl(request.getUrl());
+    final HttpContent content = createContent(request);
+    final HttpHeaders headers = createHeaders(request);
 
     if (request.hasQueryParameters()) {
       genericUrl.putAll(request.getQueryParameters());
@@ -126,7 +181,13 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
 
     final var httpRequest = requestFactory.buildRequest(method, genericUrl, content);
     httpRequest.setFollowRedirects(false);
+    setTimeout(request, httpRequest);
+    httpRequest.setHeaders(headers);
 
+    return httpRequest;
+  }
+
+  protected void setTimeout(HttpJsonRequest request, HttpRequest httpRequest) {
     if (request.getConnectionTimeoutInSeconds() != null) {
       long connectionTimeout =
           TimeUnit.SECONDS.toMillis(Long.parseLong(request.getConnectionTimeoutInSeconds()));
@@ -135,13 +196,9 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
       httpRequest.setReadTimeout(intConnectionTimeout);
       httpRequest.setWriteTimeout(intConnectionTimeout);
     }
-
-    final var headers = createHeaders(request);
-    httpRequest.setHeaders(headers);
-    return httpRequest;
   }
 
-  private HttpContent createContent(final HttpJsonRequest request) {
+  protected HttpContent createContent(final HttpJsonRequest request) {
     if (request.hasBody()) {
       return new JsonHttpContent(gsonFactory, request.getBody());
     } else {
@@ -149,25 +206,21 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
     }
   }
 
-  private HttpHeaders createHeaders(final HttpJsonRequest request) {
+  protected HttpHeaders createHeaders(final HttpJsonRequest request) {
     final HttpHeaders httpHeaders = new HttpHeaders();
-
     if (request.hasBody()) {
       httpHeaders.setContentType(APPLICATION_JSON.getMimeType());
     }
-
     if (request.hasAuthentication()) {
       request.getAuthentication().setHeaders(httpHeaders);
     }
-
     if (request.hasHeaders()) {
       httpHeaders.putAll(request.getHeaders());
     }
-
     return httpHeaders;
   }
 
-  private HttpJsonResult toHttpJsonResponse(final HttpResponse externalResponse) {
+  protected HttpJsonResult toHttpJsonResponse(final HttpResponse externalResponse) {
     final HttpJsonResult httpJsonResult = new HttpJsonResult();
     httpJsonResult.setStatus(externalResponse.getStatusCode());
     final Map<String, Object> headers = new HashMap<>();
