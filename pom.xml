@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.camunda.connector</groupId>
         <artifactId>connector-parent</artifactId>
-        <version>0.3.0-alpha5</version>
+        <version>0.4.0-SNAPSHOT</version>
         <relativePath/>
     </parent>
 
@@ -13,13 +13,14 @@
     <description>Camunda Cloud HTTP JSON Connector</description>
     <groupId>io.camunda.connector</groupId>
     <artifactId>connector-http-json</artifactId>
-    <version>0.11.0-SNAPSHOT</version>
+    <version>0.12.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <properties>
-        <version.google-libraries-bom>26.1.4</version.google-libraries-bom>
+        <version.google-libraries-bom>26.1.5</version.google-libraries-bom>
         <version.gson-extras>1.1.0</version.gson-extras>
         <version.httpcore>4.4.15</version.httpcore>
+        <version.spring-zeebe>8.1.7-SNAPSHOT</version.spring-zeebe>
     </properties>
 
     <repositories>
@@ -45,6 +46,29 @@
             <id>connectors-snapshots</id>
             <name>Connectors Snapshot Repository</name>
             <url>https://artifacts.camunda.com/artifactory/connectors-snapshots/</url>
+        </repository>
+
+        <repository>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+            <id>zeebe</id>
+            <name>Zeebe and Spring Zeebe Repository</name>
+            <url>https://artifacts.camunda.com/artifactory/zeebe-io/</url>
+        </repository>
+        <repository>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+            <id>zeebe-snapshots</id>
+            <name>Zeebe and Spring Zeebe Snapshot Repository</name>
+            <url>https://artifacts.camunda.com/artifactory/zeebe-io-snapshots/</url>
         </repository>
     </repositories>
 
@@ -112,6 +136,13 @@
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>io.camunda</groupId>
+            <artifactId>spring-zeebe-connector-runtime</artifactId>
+            <version>${version.spring-zeebe}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -155,7 +186,7 @@
                 <dependency>
                     <groupId>io.camunda.connector</groupId>
                     <artifactId>connector-runtime-cloud</artifactId>
-                    <version>0.3.0-alpha5</version>
+                    <version>0.3.0</version>
                 </dependency>
                 <dependency>
                     <groupId>io.camunda.connector</groupId>
