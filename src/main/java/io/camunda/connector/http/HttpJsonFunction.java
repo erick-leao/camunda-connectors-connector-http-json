@@ -69,7 +69,6 @@ import org.slf4j.LoggerFactory;
 public class HttpJsonFunction implements OutboundConnectorFunction {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(HttpJsonFunction.class);
-  public static final String PROXY_FUNCTION_URL_ENV_NAME = "CAMUNDA_CONNECTOR_HTTP_PROXY_URL";
 
   private final Gson gson;
   private final GsonFactory gsonFactory;
@@ -78,7 +77,7 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
   private final String proxyFunctionUrl;
 
   public HttpJsonFunction() {
-    this(ConnectorConfigurationUtil.getProperty(PROXY_FUNCTION_URL_ENV_NAME));
+    this(ConnectorConfigurationUtil.getProperty(Constants.PROXY_FUNCTION_URL_ENV_NAME));
   }
 
   public HttpJsonFunction(String proxyFunctionUrl) {
@@ -148,7 +147,7 @@ public class HttpJsonFunction implements OutboundConnectorFunction {
     final GenericUrl genericUrl = new GenericUrl(authentication.getOauthTokenEndpoint());
     Map<String, String> data = getDataForAuthRequestBody(authentication);
     HttpContent content = new JsonHttpContent(gsonFactory, data);
-    final String method = request.getMethod().toUpperCase(); // Correct?
+    final String method = Constants.POST;
 
     final var httpRequest = requestFactory.buildRequest(method, genericUrl, content);
     httpRequest.setFollowRedirects(false);
